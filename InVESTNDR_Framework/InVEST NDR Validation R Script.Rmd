@@ -5,7 +5,7 @@ Nutrient Delivery Model (NDR)."
 author: "Valladares-Castellanos M, De Jesus Crespo R,  Xu J, Douthat T*"
 reference: "add journal reference"
 version date: "march 2024"
-github: "add link here"
+github: "https://github.com/LSU-EPG/Puerto-Rico-ES-Project/edit/main/InVESTNDR_Framework/InVEST%20NDR%20Validation%20R%20Script.Rmd"
 output: html_notebook
 ---
 

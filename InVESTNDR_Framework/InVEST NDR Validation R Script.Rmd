@@ -1,0 +1,1076 @@
+---
+title: "InVEST NDR Validation R Script" 
+sub title: "How to Validate an Ecosystem Service Model? A Framework with InVEST 
+Nutrient Delivery Model (NDR)."
+author: "Valladares-Castellanos M, De Jesus Crespo R,  Xu J, Douthat T*"
+reference: "add journal reference"
+version date: "march 2024"
+github: "add link here"
+output: html_notebook
+---
+
+### General Description:
+We propose a framework divided into three stages to validate InVEST Nutrient 
+Delivery Ratio Model (NDR) estimates for water quality purposes. The first stage 
+overviews running the NDR model inputs, processes, and outputs. The second stage
+describes building a long-term reference dataset from open-source water quality 
+observations. Finally, the third stage focuses on the InVEST model calibration 
+and validation using the reference data calculated in Stage 2. To facilitate the 
+workflow implementation, we described the process of developing Stage 2 and 
+Stage 3 in this R script template, “InVEST NDR Validation R Script.” We provided 
+a framework implementation example using the Commonwealth of Puerto Rico as a 
+case study. Stage 1 of the workflow described takes place in the InVEST workbench, 
+which is available for download at the Natural Capital Project data repository (https://naturalcapitalproject.stanford.edu/software/invest/invest-downloads-data). 
+Furthermore, this workflow uses the dataRetrieval package to download NWIS and 
+WQP data; for more information about this package, review the dataRetrieval 
+documentation (https://cran.r-project.org/web/packages/dataRetrieval/vignettes/dataRetrieval.html).
+Finally, we focused on data sources available in the United States; therefore, 
+if used outside of the U.S., the user should contemplate comprehensive adjustments 
+in the data parameters and units that might be required. 
+
+#### Additional notes:
+The headings of the template match the workflow stages of the accompanying article.
+Refer to the article for a detailed explanation of each section. Each code chunk 
+describes the R code template, followed by an application example (represented in 
+each chunk as an "_eg" object).
+
+Finally, before using the script we suggest to download the supporting .csv files
+used for the example sections (EPA PointSource Pollution by HUC12, InVEST_MS_Pexp, HUC12_MS),
+and save them in the working directory alomg with the R script.
+
+_______________________________________________________________________________
+###  InVEST NDR Validation TEMPLATE
+_______________________________________________________________________________
+
+#############################################
+### 1. Install libraries and load packages
+#############################################
+ 
+```{r}
+## Suggested Packages
+packages <- c("tidyverse", "dplyr","tidyr", "EGRET", "dataRetrieval", 
+              "broom", "mgcv", "purrr", "readr", "ggplot2", "rsample",
+              "plyr", "MuMIn", "MLmetrics", "corrr", "fitdistrplus")
+
+## Install packages:
+inst <- packages[1:16] %in% installed.packages()
+if(length(packages[!inst]) > 0) install.packages(packages[!inst])
+
+## Load packages:
+lapply(packages, require, character.only = TRUE)
+
+```
+
+
+#############################################
+### 2. Building the Reference Dataset
+#############################################
+
+The following section describes the process to retrieve water quality data from the 
+Water Quality Portal (National Water Quality Monitoring Council, 2020), fill in data gaps,
+and estimate the reference nutrient loads.
+
+================================================================
+#### 2.1. Reviewing the Availability of Reference Data 
+================================================================
+
+The step describes defining a location to download the monitoring station data 
+based on a spatial bounding box (e.g., using geographic coordinates). This step 
+requires the previous evaluation of the nutrient and discharge parameters 
+available at the National Water Information System 
+(https://help.waterdata.usgs.gov/codes-and-parameters/parameters).
+
+----------------------------------------------------------------
+2.1.1 Data Sources  
+----------------------------------------------------------------
+Define the Spatial Bounding Box, parameters, and explore monitoring stations 
+with available data.
+
+```{r}
+# Evaluating NWIS: Search only within NWIS Site Service.
+
+sites_NWIS <- whatNWISsites(  
+  bBox = c( "insert lat/lon following xmin , ymin , xmax , and ymax order"),
+  parameterCd = c("insert here 5 digit code of the parameter(s) of interest"),
+  hasDataTypeCd = "dv")
+
+# Evaluating WQP sites with data available: Search within all WQP repositories
+
+sites_WQP <- whatWQPdata(  
+  bBox = c("insert lat/lon following xmin , ymin , xmax , and ymax order"),
+  parameterCd = c("insert here 5 digit code of the parameter(s) of interest"),
+  hasDataTypeCd = "dv") 
+```
+
+```{r}
+# Example: Locating sites within Puerto Rico's latitude and longitude bounding  
+# box that has discharge (00060) in the NWIS service.
+
+sites_NWIS_eg <- whatNWISsites(  
+  bBox = c(-67.940244,17.912176,-65.223149,18.516095),
+  parameterCd = c("00060"),
+  hasDataTypeCd = "dv")
+
+# Example: Locating sites within Puerto Rico's latitude and longitude bounding
+# box that has Phosphorus (00665) data in the WQP.
+
+sites_WQP_eg <- whatWQPdata(  
+  bBox = c(-67.940244,17.912176,-65.223149,18.516095),
+  parameterCd = c("00665"),
+  hasDataTypeCd = "dv") 
+```
+*Note*: The output shows that there are 656 sites with available Phosphorus 
+concentration data; however, only 229 have discharge data available. To estimate 
+nutrient load, both discharge and nutrient concentration should be available. 
+Furthermore, we suggest evaluating the spatial distribution of the resulting list 
+of monitoring stations to identify potential spatial coverage limitations of the 
+dataset (watersheds of interest that do not have data available). The user could
+evaluate the spatial distribution using the geographical coordinates available in 
+the site objects (e.g., sites_WQP_eg). In this example, we used the sites_WQP_eg 
+to retrieve nutrient data and sites_NWIS_eg to retrieve discharge to exemplify the 
+use of both datasets.
+
+----------------------------------------------------------------
+2.1.2 Data Retrieval
+----------------------------------------------------------------
+The following section describes downloading the nutrient, discharge, or other 
+parameter data available in the NWIS or WQP repositories.
+
+```{r}
+# Describing parameter name, start and end date for the data retrieval 
+
+Parameter <- "parameter name" ## parameter code or the "SRSName" listed in 
+                                ## the parameter table. 
+StartDate <- "year-month-day"
+EndDate <- "year-month-day"
+
+# Download data: The function described below downloads the monitoring station 
+# data as a list. To bind the data together, we suggest creating a simple row 
+# identifier to bind the data sets afterward with the monitoring station-specific information.  
+sites_WQP <- sites_WQP %>% 
+  dplyr::mutate(rn = row_number()) 
+
+sites_WQP$rn <- as.character(sites_WQP$rn) # row_number (rn) as identifier
+
+# Create a list of the MS sites
+sites_WQP_list <- as.list(sites_WQP$site_no)  # site_no = Monitoring Station ID
+
+# Use function to download data
+Data_list <- lapply("sites with available data (e.g. sites_WQP_list)",
+                    FUN= function(x){
+readWQPSample(x, Parameter, StartDate, EndDate)}) #readNWISdata for NWIS Service
+
+# Bind nutrient data sets together by rn
+Data_list.df <- bind_rows(Data_list, .id = "rn")  
+
+# Join the Monitoring Station information (e.g., latitude, longitude, river name)
+Data_list.df <- Data_list.df %>%
+  left_join(sites_WQP, by= "rn")
+
+```
+
+```{r}
+# Example: Downloading from the WQP Phosphorus data available between 
+# January 1st 2000, and December 31st, 2022 using the list of sites with 
+# data available (e.g., sites_WQP_eg)
+
+# Define parameters
+TPParameter <- "Phosphorus"
+StartDate <- "2000-01-01"
+EndDate <- "2022-12-31"
+
+# create the unique identifier
+sites_WQP_eg <- sites_WQP_eg %>% 
+  dplyr::mutate(rn = row_number())
+
+sites_WQP_eg$rn <- as.character(sites_WQP_eg$rn)
+
+# *Note*: to download MS data from the WQP, the MS ID should have 
+# a preceding "institution abbreviation" before the MS code if the site number 
+# (site_no) does not have it, please use the following code as an example:  
+
+# sites_WQP_eg$site_no <- paste("institution abbreviation (e.g., USGS)", 
+#                              sites_WQP_eg$site_no, sep="-") 
+
+# Create a list of the MS sites
+sites_WQP_list_eg <- as.list(sites_WQP_eg$MonitoringLocationIdentifier)  
+
+# Apply download function
+Sample_PR_phos_eg <- lapply(sites_WQP_list_eg,
+                    FUN= function(x){
+readWQPSample(x, TPParameter, StartDate, EndDate)}) 
+
+# *Note*: The phosphorus data in this example was available in mg/L. 
+# This might vary depending on the parameter selected
+
+# Bind phosphorus data sets together by rn
+Sample_PR_phos.df_eg <- bind_rows(Sample_PR_phos_eg, .id = "rn")  
+
+# Join the Monitoring Station information
+Sample_PR_phos.df_eg <- Sample_PR_phos.df_eg %>%
+  dplyr:: left_join(sites_WQP_eg, by= "rn") %>%
+  dplyr:: mutate(site_no = gsub( "USGS-", "", as.character(MonitoringLocationIdentifier)))
+  
+
+```
+
+
+```{r}
+# Example: Downloading from the NWIS daily discharge data (00060) available 
+# between January 1st, 2000, and December 31st, 2022, using the list of sites 
+# with data available (e.g., sites_NWIS_eg).
+
+# Define parameters
+QParameter <- "00060"  
+StartDate <- "2000-01-01"
+EndDate <- "2022-12-31"
+
+# create the unique identifier
+sites_NWIS_eg <- sites_NWIS_eg %>% 
+  dplyr::mutate(rn = row_number())
+
+sites_NWIS_eg$rn <- as.character(sites_NWIS_eg$rn)
+
+# Create a list of the MS sites
+sites_NWIS_list_eg <- as.list(sites_NWIS_eg$site_no)  
+
+# Apply download function
+Sample_PR_Q_eg <- lapply(sites_NWIS_list_eg,
+                    FUN= function(x){
+readNWISDaily(x, QParameter, StartDate, EndDate, convert = TRUE)}) 
+
+# *Note*: The discharge data is automatically transformed into cubic meters 
+# per second unless the user sets the "convert" argument to FALSE. In that 
+# case, the output units will be cubic feet per second (cfs).
+
+# Bind monitoring stations list of discharge data sets together by rn
+Sample_PR_Q.df_eg <- bind_rows(Sample_PR_Q_eg, .id = "rn")  
+
+# Join the Monitoring Station information
+Sample_PR_Q.df_eg <- Sample_PR_Q.df_eg %>%
+  left_join(sites_NWIS_eg, by= "rn")
+
+```
+*Note*: Review the output to understand columns information and units, and 
+the number of observations available by MS. 
+
+
+================================================================
+#### 2.2. Evaluating the Available Reference Data 
+================================================================
+
+The process described below focuses on evaluating data gaps in nutrient data; 
+however, discharge data could also have data gaps. Therefore, we also encourage 
+the user to repeat the process to assess data gaps in discharge data.
+
+----------------------------------------------------------------
+2.2.1 Evaluating the Discharge
+----------------------------------------------------------------
+
+This section describes an example of evaluating discharge based on flow duration 
+statistics (Exceedance probability (ep)) following Armstrong et al. 2004 guidelines. 
+We described the discharge categories as follows: 1) we categorized as "low" the 
+75-percent monthly flow duration (Q75), which refers to flows that exceed 75 
+percent of the time during the month. 2) we categorized as "high" the 25-percent 
+monthly flow duration (Q25), which refers to flows exceeding 25 percent of the 
+time during the month. 3) we categorized as "intermediate" the 50 percent flow 
+duration (Q50) refers to flows exceeding 50 percent of the time during the month 
+flows that fall between the Q75 and Q25 discharges.
+
+
+```{r}
+## Classify discharge using the ep method
+dis_cat <- "Data_list.df" %>%  #discharge data
+  dplyr::group_by("site_no")%>%  #Monitoring stations
+  dplyr::mutate(rank = order(order("discharge", decreasing=TRUE))) %>% #create rank
+  dplyr::mutate(ep = (rank/(max(rank) + 1))) %>% # calculate ep
+  dplyr::mutate(Q_catep = case_when( ep >= 0.75 ~ "low", #classify based on ep
+                                      ep <= 0.25 ~ "high",
+                                      ep < 0.75 & ep > 0.25 ~ "intermediate"))
+```
+
+```{r}
+# Example:Classifying the Puerto Rico discharges based on the ep method
+dis_cat_eg <- Sample_PR_Q.df_eg %>%
+  dplyr::group_by(site_no)%>%
+  dplyr::mutate(rank = order(order(Q, decreasing=TRUE))) %>% 
+  dplyr::mutate(ep = (rank/(max(rank) + 1))) %>%
+  dplyr::mutate(Q_catep = case_when( ep >= 0.75 ~ "low",
+                                      ep <= 0.25 ~ "high",
+                                      ep < 0.75 & ep > 0.25 ~ "intermediate"))
+
+```
+*Note*: Nutrient concentration could be related to discharge variability;
+Therefore, evaluating the discharge values is relevant for understanding the 
+seasonal streamflow variability. The user should determine if the model used 
+to predict seasonal gaps accurately predicts peak and low flows.
+
+
+----------------------------------------------------------------
+2.2.2 Matching the Discharge with the Nutrient Data
+----------------------------------------------------------------
+
+Select columns of interest for example, the average nutrient concentration 
+(ConcAve), the sample date, and MSID. The output will give you the "observed 
+data," dates, and sites with available data. 
+
+```{r}
+# the observed data
+# select columns of interest from the nutrient data and join discharge data
+Data_obs <- Data_list.df %>% 
+  dplyr:: select("columns of interest (e.g., ConcAve, Date, site_no)") %.%
+  dplyr::inner_join("discharge_data", by= c("Date", "site_no"))
+
+# the data gaps
+Discharge <- "discharge_data" %>% 
+  dplyr::select("columns of interest (e.g., ConcAve, Date, site_no)")
+
+Data_obs_sel <- Data_obs %>% 
+  dplyr::select("columns of interest (e.g., ConcAve, Date, site_no)") 
+
+Data_gaps <- dplyr:: setdiff(Discharge, Data_obs_sel) # the output identifies 
+                                                      # dates and sites with 
+                                                      # only discharge data.
+
+```
+*Note*: Evaluate if the data gaps are clustered in certain years and locations.
+
+
+```{r}
+# Example: Joining the Puerto Rico phosphorus information to the discharge data 
+# and identifying the data gaps.
+
+# the observed data
+Data_obs_eg <- Sample_PR_phos.df_eg %>% 
+  dplyr::select(site_no, ConcAve, Date) %>%
+  dplyr::inner_join(dis_cat_eg, by= c("Date", "site_no"))
+
+# the data gaps
+Discharge_PR_eg <- dis_cat_eg %>% select(site_no, Date, Q)
+Data_obs_sel_eg <- Data_obs_eg %>% select(site_no, Date, Q) 
+
+Data_gaps_eg <- setdiff(Discharge_PR_eg, Data_obs_sel_eg) # the output identifies dates and 
+                                                          # sites with only discharge data.
+```
+*Note*: The user can adjust the "setdiff" command to understand time steps with
+discharge data gaps (First nutrient data, second discharge data.
+
+
+----------------------------------------------------------------
+2.2.2 Calculating the Nutrient Loadings: Preparing the Observed data
+----------------------------------------------------------------
+The observed data is the foundation for understanding the relationship between 
+nutrient loading and stream discharge. Before assessing that relationship, 
+unit conversion should take place to ensure unit compatibility between the 
+discharge and the nutrient data.
+
+```{r}
+# The observed data should be transformed from nutrient concentration 
+# (mass/Volume) to nutrient loading (mass/time). In this example, nutrient 
+# concentration is available as mg/L and needs to be transformed into g/s.
+# The discharge data is represented in cubic meters per second (cms).
+
+# Example: unit conversion to prepare the observed data.
+
+# select columns of interest: site_no (MSID), Average concentration (mg/L), 
+# Discharge Q (cms), log Discharge (LogQ)
+Data_obs_eg <- Data_obs_eg %>%
+  dplyr:: select(site_no, Date, ConcAve, Q, LogQ, Q_catep)
+
+# convert units
+Data_obs_eg$ConcAve_gm3 <- (Data_obs_eg$ConcAve/1000)*28.316847/0.028317 # transforming 
+                                                                # from mg/l to g/m3 
+```
+
+```{r}
+# Estimating nutrient loading using equation: NLn = C * Q
+Data_obs$Load <- "nutrient Concentration (C)" * "discharge(Q)"
+
+# estimating the logarithm of the nutrient load
+Data_obs$Load <- log(Load)
+
+```
+
+```{r}
+# Example: Transforming the Puerto Rico observed phosphorus concentration to
+# loading.
+
+Data_obs_eg$load_gs <- Data_obs_eg$Q * Data_obs_eg$ConcAve_gm3  # calculating loading in g/s
+Data_obs_eg$logload_gs <- log(Data_obs_eg$load_gs) # calculating the log(loading)
+```
+
+
+================================================================
+#### 2.3. Building the Reference Data Model
+================================================================
+This section describes the process of filling data gaps using regression 
+methods. When using statistical approaches such as regression, a proportion 
+of the observed data is used to train the regression model (70%), and the 
+remaining data is used to validate the model (30%). The following R code 
+describes a process using the Rating Curve Regression method. However, a 
+review of other methods to fill data gaps is available in Lee et al. (2016).
+
+----------------------------------------------------------------
+2.3.1 Regression Model Calibration and Validation
+----------------------------------------------------------------
+
+```{r}
+#Creating a calibration and validation function
+
+Ref_model <- "Data_obs" %>% #The observed data object
+dplyr::group_by("site_no") %>%
+  nest() %>%              #The nest function groups the data by monitoring 
+                          #station (MS) and trains a regression for each site.                  
+dplyr::mutate(split= map(data, ~group_initial_split(., "Q_catep", prop = 7/10)), #randomly split 70% of the dataset within each MS,                                                                                   taking a random sample from each discharge category.                                                                                    Also available the "~initial_split" for random                                                                                         proportional sampling. Used when not all discharge                                                                                     categories are present in each MS.
+         train70 = map(split, ~training(.)),      #Select the 70% sample to fit the model
+         test30  = map(split, ~testing(.)),       #Select th 30% sample to validate the model 
+         fit = map(train70, ~lm("log(Load)" ~ "Log(discharge)", data = .)), #model function
+         pred  = map2(.x = fit, .y = test30, ~predict(object = .x, newdata = .y))) #predict loads based on trained model.
+```
+
+```{r}
+# Example: Training and validating a regression model with the Puerto Rico observed data.
+Ref_model_eg <- Data_obs_eg %>% #The observed data object
+  dplyr::group_by(site_no) %>%
+  dplyr::filter(n()>2) %>% #filter sites that have at least 2 rows to split
+  nest() %>%              #Nest the data by Monitoring Station 
+  mutate(split= map(data, ~initial_split(., prop = 7/10, pool = 0.1)), 
+         train70 = map(split, ~training(.)),      
+         test30  = map(split, ~testing(.)),       
+         fit = map(train70, ~lm(logload_gs ~ LogQ, data = .)),    
+         pred  = map2(.x = fit, .y = test30, ~predict(object = .x, newdata = .y))) 
+```
+
+
+================================================================
+#### 2.4. Evaluating Reference Model Accuracy
+================================================================
+In this section, we evaluate the goodness of fit of the reference model 
+predictions using the Nash-Sutcliffe efficiency (NSE) and the coefficient of 
+determination (R2). In addition, we evaluate model uncertainty by estimating 
+the Confidence Intervals (CI) and the  Mean Percent Error (MPE).
+
+----------------------------------------------------------------
+2.4.1 Evaluating Model Training Phase
+----------------------------------------------------------------
+
+```{r}
+## Evaluating the model outputs of the training phase (70% of the observed data)
+### Start by unnesting the model object to observe the overall goodness of fit of the 
+### training phase, intercept, and coefficients.
+
+# Inspect goodness of fit of the trained model. The "glanced" table will described
+# the model AIC,BIC, p-value, R2, adj. R2, and other model statistics. 
+Ref_model_glance <- Ref_model %>%
+  dplyr::mutate(glanced = map(fit, glance)) %>%
+  dplyr::select(site_no, glanced) %>%
+  unnest(glanced)
+
+# Inspect the intercept and coefficients of the trained mode. The "tidied" table will 
+# described the intercept and coefficient std. error, statistic, and p-value.  
+Ref_model_tidy <- Ref_model %>%
+  dplyr::mutate(tidied = map(fit, ~tidy(.x, conf.int = TRUE, conf.level = 0.95))) %>%
+  dplyr::select(site_no, tidied) %>%
+  unnest(tidied)
+```
+*Note*: Evaluate adj.R2 values, particularly we want R2 higher than 0.5 and 
+significant estimates
+
+
+----------------------------------------------------------------
+2.4.2 Evaluating Model Validation Phase
+----------------------------------------------------------------
+
+```{r}
+## Evaluating the model performance during the Validation Phase. This section 
+## answers the question of how well the model is predicting the loadings.
+
+# Selecting and unnesting the columns that contain the validation output
+Ref_model_eval <- Ref_model %>%
+  dplyr::select(site_no, test30, pred) %>% #"pred" refers to the model predicted log(loads).
+  unnest(test30, pred)
+
+# Select the predicted and observed values
+Ref_model_eval <- Ref_model_eval %>%
+  dplyr::select("site_no", "Date", "observed_load", "log(observed_load)", "Q_catep","predicted_load") %>%
+  dplyr::mutate(Load_pred = exp("predicted_load"))  #exponentiating the predicted values
+
+# Evaluate residuals and the adj. R2. 
+Ref_model_eval_ss <- Ref_model_eval %>%
+  dplyr::group_by(site_no) %>%  #group by MS
+  dplyr::summarise(total_ss = sum(("log(observed_load)" - mean("log(observed_load)"))^2), #estimate sum of squares
+            residual_ss = sum(("log(observed_load)" - "predicted_load")^2), #estimate residuals
+            n = n(),
+            .groups = 'drop') %>%
+  dplyr::mutate(r.squared = 1 - (residual_ss/total_ss), #estimate R2
+         adj.r.squared = 1 - (((1-r.squared)*(n-1))/(n-1-1))) #estimate adj. R2
+
+# Estimate the Nash-Sutcliffe Efficiency
+Ref_model_eval <- Ref_model_eval %>%
+  dplyr::group_by(site_no) %>%
+  dplyr::mutate(Nash_coef = (1-((sum(("predicted_load"- "observed_load")^2))/(sum(("observed_load" - mean("observed_load"))^2))))) %>%
+  #Nash-Sutcliffe Efficiency equation 
+  dplyr::left_join(Ref_model_eval_ss, by = "site_no") %>% #joined previous statistics
+  dplyr::mutate(performance = case_when(Nash_coef >= 0.75 ~ "Very good",   #Classify NSE 
+                                  Nash_coef >= 0.65 & Nash_coef < 0.75 ~ "Good",
+                                  Nash_coef > 0.5 & Nash_coef < 0.65 ~ "Satisfactory",
+                                  Nash_coef <= 0.5 ~ "Unsatisfactory"))
+```
+*Note*: The output will describe the monitoring stations where the model predictions 
+had a suitable NSE (>0.5), and adj. R2 of 0.5. The output also allows us to explore 
+the model residuals..
+
+
+```{r}
+## Example: Evaluating Puerto Rico reference model predictions for total phosphorus load estimates.
+## Evaluating the model outputs from the training phase 
+
+# Inspect goodness of fit of the trained model. 
+Ref_model_glance_eg <- Ref_model_eg %>%
+  dplyr::mutate(glanced = map(fit, glance)) %>%
+  dplyr::select(site_no, glanced) %>%
+  unnest(glanced)
+
+# Inspect the intercept and coefficients of the trained mode.  
+Ref_model_tidy_eg <- Ref_model_eg %>%
+  dplyr::mutate(tidied = map(fit, ~tidy(.x, conf.int = TRUE, conf.level = 0.95))) %>%
+  dplyr::select(site_no, tidied) %>%
+  unnest(tidied)
+
+## Evaluating the model performance during the Validation Phase. 
+
+# Selecting and unnesting the columns that contain the validation output
+Ref_model_eval_eg <- Ref_model_eg %>%
+  dplyr::select(site_no, test30, pred) %>% 
+  unnest(test30, pred)
+
+# Select the predicted and observed values
+Ref_model_eval_eg <- Ref_model_eval_eg %>%
+  dplyr::select(site_no, Date, load_gs, logload_gs, Q_catep,pred) %>%
+  dplyr::mutate(Load_pred = exp(pred))  
+
+# Evaluate residuals and the adj. R2. 
+Ref_model_eval_ss_eg <- Ref_model_eval_eg %>%
+  dplyr::group_by(site_no) %>%  #group by MS
+  dplyr::summarise(total_ss = sum((logload_gs - mean(logload_gs))^2), 
+            residual_ss = sum((logload_gs - pred)^2), 
+            n = n(),
+            .groups = 'drop') %>%
+  dplyr::mutate(r.squared = 1 - (residual_ss/total_ss), 
+         adj.r.squared = 1 - (((1-r.squared)*(n-1))/(n-1-1))) 
+
+# Estimate the Nash-Sutcliffe Efficiency
+Ref_model_eval_eg <- Ref_model_eval_eg %>%
+  dplyr::group_by(site_no) %>%
+  dplyr::mutate(Nash_coef = (1-((sum((Load_pred - load_gs)^2))/(sum((load_gs - mean(load_gs))^2))))) %>%
+  dplyr::left_join(Ref_model_eval_ss_eg, by = "site_no") %>% 
+  dplyr::mutate(performance = case_when(Nash_coef >= 0.75 ~ "Very good",   
+                                  Nash_coef >= 0.65 & Nash_coef < 0.75 ~ "Good",
+                                  Nash_coef > 0.5 & Nash_coef < 0.65 ~ "Satisfactory",
+                                  Nash_coef <= 0.5 ~ "Unsatisfactory"))
+```
+
+
+----------------------------------------------------------------
+2.4.3 Model Uncertainty 
+----------------------------------------------------------------
+
+```{r}
+#Evaluating the mean percent error (MPE)
+
+## MPE by monitoring station
+Ref_model_eval_mpe_ms <- Ref_model_eval %>%
+  dplyr::select(site_no, "predicted_load", "observed_load", "Q_catep") %>%
+  dplyr::group_by(site_no) %>%
+  dplyr::mutate(n= n()) %>%
+  dplyr::summarise(mpe = (100*(sum((abs("observed_load" - "predicted_load"))/abs("observed_load"))))/(n)) %>%
+  dplyr::group_by(site_no, mpe) %>%
+  dplyr::summarise(n=n())
+
+## Evaluate MPE by discharge category
+Ref_model_eval_mpe_dis <- Ref_model_eval %>%
+  dplyr::select(site_no, "predicted_load", "observed_load", "Q_catep") %>%
+  dplyr::group_by(site_no, Q_catep) %>%
+  dplyr::mutate(n= n()) %>%
+  dplyr::summarise(mpe = (100*(sum((abs("observed_load" - "predicted_load"))/abs("observed_load"))))/(n)) %>%
+  dplyr::group_by(site_no,Q_catep, mpe) %>%
+  dplyr::summarise(n=n())
+```
+*Note*: Lower MPE values relate to higher model accuracy.
+
+```{r}
+## Example: Evaluate the accuracy of the Puerto Rico phosphorus load estimates using
+## the MPE
+
+## MPE by monitoring station
+Ref_model_eval_mpe_ms_eg <- Ref_model_eval_eg %>%
+  dplyr::select(site_no, Load_pred, load_gs, Q_catep) %>%
+  dplyr::group_by(site_no) %>%
+  dplyr::mutate(n= n()) %>%
+  dplyr::summarise(mpe = (100*(sum((abs(load_gs - Load_pred))/abs(load_gs))))/(n)) %>%
+  dplyr::group_by(site_no, mpe) %>%
+  dplyr::summarise(n=n())
+
+## Evaluate MPE by discharge category
+Ref_model_eval_mpe_dis_eg <- Ref_model_eval_eg %>%
+  dplyr::select(site_no, Load_pred, load_gs, Q_catep) %>%
+  dplyr::group_by(site_no, Q_catep) %>%
+  dplyr::mutate(n= n()) %>%
+  dplyr::summarise(mpe = (100*(sum((abs(load_gs - Load_pred))/abs(load_gs))))/(n)) %>%
+  dplyr::group_by(site_no,Q_catep, mpe) %>%
+  dplyr::summarise(n=n())
+```
+
+
+================================================================
+#### 2.5. Predicting Reference Data Gaps
+================================================================
+In this section, we describe filling data gaps using the satisfactory regression 
+estimates derived in the previous step using the rating curve regression.
+
+```{r}
+# select satisfactory monitoring stations
+Ref_model_sel <- Ref_model_eval %>% filter(performance != "Unsatisfactory") %>%
+  dplyr::select(site_no, Nash_coef) %>%
+  dplyr::distinct()%>%
+  dplyr::left_join(Ref_model_tidy, by= "site_no") %>% #Join model estimates
+  dplyr::select(site_no, term, estimate) %>%   #select estimates
+  tidyr::pivot_wider(names_from = term, values_from = estimate) #Create wide table
+
+# select satisfactory monitoring stations from the discharge data to fill data gaps
+Discharge_ref <- Discharge %>% 
+  dplyr::select(site_no, Date, Q) %>%
+  dplyr::filter(site_no %in% Ref_model_sel$site_no) %>%
+  dplyr::left_join(Ref_model_sel, by= "site_no") %>%
+  dplyr::mutate(exp_intercept = exp(`(Intercept)`)) %>% #exponenting the model intercept
+  dplyr::mutate(Year = substr(Date,1,4))  #creating a calendar year column (the data has water year)
+
+# estimate nutrient loads based on equation NL= exp(intercept)*discharge*(coefficient_LogQ) 
+Loads_day <- Discharge_ref %>%
+  dplyr:: group_by(site_no) %>%
+  dplyr:: mutate(Load_gseg = exp_intercept * Q * LogQ) %>% #Load in g s-1
+  dplyr:: mutate(load_gday = Load_gseg *3600*24) #Load g day-1
+
+# estimate yearly loads and unit conversion
+Load_year <- Loads_day %>%
+  dplyr::group_by(site_no, Year) %>%
+  dplyr::summarise(load_gyear = sum(load_gday)) %>% #load g year
+  dplyr::mutate(load_kgyear = load_gyear * 0.001 ) %>% #load kg year-1
+  dplyr::mutate(load_tonyear = load_kgyear/1000) #load ton year-1
+
+# Mean load per year per MS (kg)
+Load_mean <- Load_year %>%
+  dplyr::group_by(site_no) %>%
+  dplyr::summarise(Ref_load_kgyear = mean(load_kgyear))
+```
+
+```{r}
+## Example: Estimating mean phosphorus load for Puerto Rico reference areas 
+## based on satisfactory model performance.
+
+# select satisfactory monitoring stations
+Ref_model_sel_eg <- Ref_model_eval_eg %>% 
+  dplyr::filter(performance != "Unsatisfactory") %>%
+  dplyr::select(site_no, Nash_coef) %>%
+  dplyr::distinct()%>%
+  dplyr::left_join(Ref_model_tidy_eg, by= "site_no") %>% 
+  dplyr::select(site_no, term, estimate) %>%   
+  tidyr::pivot_wider(names_from = term, values_from = estimate) 
+
+# select satisfactory monitoring stations from the discharge data to fill data gaps
+Discharge_ref_eg <- Sample_PR_Q.df_eg %>% 
+  dplyr::select(site_no, Date, Q) %>%
+  dplyr::distinct()%>%
+  dplyr::filter(site_no %in% Ref_model_sel_eg$site_no) %>%
+  dplyr::left_join(Ref_model_sel_eg, by= "site_no") %>%
+  dplyr::mutate(exp_intercept = exp(`(Intercept)`)) %>% #exponenting the model intercept
+  dplyr::mutate(Year = substr(Date,1,4))  #creating a calendar year column (the data has water year)
+
+# estimate nutrient loads based on equation NL= exp(intercept)*discharge*(coefficient_LogQ) 
+Loads_day_eg <- Discharge_ref_eg %>%
+  dplyr:: group_by(site_no) %>%
+  dplyr:: mutate(Load_gseg = exp_intercept * Q * LogQ) %>% #Load in g s-1
+  dplyr:: mutate(load_gday = Load_gseg *3600*24) #Load gday-1
+
+# estimate yearly loads and unit conversion
+Load_year_eg <- Loads_day_eg %>%
+  dplyr::group_by(site_no, Year) %>%
+  dplyr::summarise(load_gyear = sum(load_gday)) %>% #load g year-1
+  dplyr::mutate(load_kgyear = load_gyear * 0.001 ) %>% #load kg year-1
+  dplyr::mutate(load_tonyear = load_kgyear/1000) #load ton year-1
+
+# Mean load per year per MS (kg) = Reference Nutrient Loads
+Load_mean_eg <- Load_year_eg %>%
+  dplyr::group_by(site_no) %>%
+  dplyr::summarise(Ref_load_kgyear = mean(load_kgyear))
+
+```
+*Note*: The Mean nutrient load is the final output that will be used to validate InVEST. 
+
+
+================================================================
+#### 2.6. Delineating Drainage Areas
+================================================================
+The reference nutrient loads represent the average nutrient mass moving through 
+the stream annually from a drainage area. Therefore, before comparing reference 
+nutrient loads with the InVEST outputs, defining the model estimates in the same 
+spatial extent is relevant. In this script, we do not go through the process of 
+delineating the drainage areas. However, there are several tools available to
+delineate drainage areas based on a location of interest or outlet 
+(Monitoring station location), such as the USGS StreamStats (Ries Iii et al., 2008), 
+InVEST DelineateIT  (Natural Capital Project, 2023),and GIS Software's hydrology tools 
+(ArcGIS/QGIS). The sites_WQP and sites_NWIS objects contain the geographical 
+coordinates of the monitoring stations (Latitude and Longitude) that could be used 
+as an outlet to delineate the drainage areas using one of the methods listed above. 
+Before continuing in the script, the user should summarize the InVEST output using 
+the drainage areas' spatial extent.
+
+
+================================================================
+#### 2.7. Estimating Point Source Pollution
+================================================================
+In this workflow, the non-point source pollution is estimated by the InVEST NDR model. 
+Therefore, if there are significant point sources of pollution inside the drainage areas, 
+the InVEST estimates are not directly comparable to the reference nutrient 
+load data. Hence, the reference data should be adjusted based on Point Source Pollution 
+before the model assessment.
+
+The Point Source Pollution (PSP) data used in this script is available at the 
+Integrated Compliance Information System and the National Pollutant Discharge 
+Elimination System (ICIS-NPDES)
+(https://echo.epa.gov/trends/loading-tool/get-data/watershed-statistics). The NPDES report 
+contain Nitrogen and Phosphorus point-source discharges to US waters.
+The nitrogen load is defined as the "Total DMR Nitrogen Discharges (lb/yr)," which represents 
+the aggregated nitrogen discharges (total nitrogen) reported in the system in the selected year.
+The phosphorus load is defined as the "Total DMR Phosphorus Discharges (lb/yr)," and it 
+represents the aggregated phosphorus discharges (total phosphorus) reported for a given year(EPA, 2023).
+
+The data is downloaded in a .csv format, where each year is stored in a separate .csv file.
+In addition, the PSP discharges are reported by Hydrological Units (HUC12); 
+therefore, it is necessary to identify the HUC12 associated with each monitoring station 
+drainage area.
+
+Once the files are downloaded and the HUC12 associated with each MS drainage area has been
+identified, the PSP data needs to be prepossessed as a single data frame containing 
+the mean PSP loads per drainage area before using it to adjust the reference nutrient 
+loads. In this script, we present an example code to do so.
+
+```{r}
+## Reading the list of the PSP files and joining them together.
+PSP <- list.files(path = "the folder where the .csv files are saved",
+               pattern = "*.csv", 
+               full.names = T) %>%
+    map_df(~read_csv(., col_types = cols(.default = "c", `Total DMR Nitrogen Discharges (lb/yr)`= col_double(), `Total DMR Phosphorus Discharges (lb/yr)` = col_double() ))) 
+
+```
+
+
+```{r}
+## Example: Reading a list of Puerto Rico PSP .csv files from 2007 to 2022 for the 
+## 18 monitoring station drainage areas.
+
+PSP_eg <- list.files(path = "./EPA PointSource Pollution by HUC12/",
+               pattern = "*.csv", 
+               full.names = T) %>%
+    map_df(~read_csv(., col_types = cols(.default = "c", `Total DMR Nitrogen Discharges (lb/yr)`= col_double(), `Total DMR Phosphorus Discharges (lb/yr)` = col_double(), Year = col_number()))) 
+
+PSP_eg <- PSP_eg %>% mutate(across(where(is.double), ~ round(., 3))) # round to 3 decimals
+
+
+# Read the list of HUC12 associated with each Monitoring station. We derived the 
+#list from the spatial join between the HUC12 layer and the MS drainage areas using ArcGIS Pro 3.0.
+HUC12_MS_eg <- read_csv("HUC12_MS.csv", 
+    col_types = cols(.default = "c"))
+
+
+## Join the monitoring stations ID to the PSP data based on the HUC12
+PSP_eg <- PSP_eg %>%
+  dplyr::select("Year",`HUC 12 Code`, `Total DMR Nitrogen Discharges (lb/yr)`, `Total DMR Phosphorus Discharges (lb/yr)`) %>%
+  dplyr:: left_join(HUC12_MS_eg, by = c(`HUC 12 Code` = "huc12"))
+
+```
+
+```{r}
+## Estimating the average nutrient load value per MS in kg/year  (currently in pounds per year).
+
+# estimate the mean load by HUC12
+PSP_Mean <- PSP %>%
+  dplyr::group_by("MSID", "Huc12 ID") %>%
+  dplyr::summarise(mean_N_load = mean(`Total DMR Nitrogen Discharges (lb/yr)`, na.rm = TRUE), 
+                   mean_P_load = mean(`Total DMR Phosphorus Discharges (lb/yr)`, na.rm = TRUE))
+
+# estimate the mean PSP load by drainage area in kg year-1 or ton year-1.
+PSP_total <- PSP_Mean %>%
+  dplyr::group_by("MSID") %>%
+  dplyr::summarise(mean_N_load_lby = sum(mean_N_load, na.rm = TRUE),
+                   mean_P_load_lby = sum(mean_P_load, na.rm = TRUE)) %>%   ## lb year-1
+  dplyr::mutate(PSP_mean_N_load_kgyear = mean_N_load_lby*0.453592,
+                PSP_mean_P_load_kgyear = mean_P_load_lby*0.453592,# kg year-1
+                PSP_mean_N_load_tonyear = mean_N_load_lby*0.0005,
+                PSP_mean_P_load_tonyear = mean_P_load_lby*0.0005)  #ton year-1
+
+PSP_total <- PSP_total %>% mutate(across(where(is.numeric), ~ round(., 3))) # round to 3 decimals
+```
+
+
+```{r}
+## Example: Estimating the average phosphorus loads from PSP data for Puerto Rico 
+## from 2007 to 2022.
+
+# estimate the mean load value by HUC12
+PSP_Mean_eg <- PSP_eg %>%
+  dplyr::group_by(MS_Name, `HUC 12 Code`) %>%
+   dplyr::summarise(mean_P_load = mean(`Total DMR Phosphorus Discharges (lb/yr)`, na.rm = TRUE))
+
+# estimate the mean PSP load by drainage area in kg year-1 or ton year-1.
+PSP_total_eg <- PSP_Mean_eg %>%
+  dplyr::group_by(MS_Name) %>%
+  dplyr::summarise(mean_P_load_lby = sum(mean_P_load, na.rm = TRUE)) %>%   
+  dplyr::mutate(PSP_mean_P_load_kgyear = mean_P_load_lby*0.453592,
+                PSP_mean_P_load_tonyear = mean_P_load_lby*0.0005)  
+PSP_total_eg <- PSP_total_eg %>% mutate(across(where(is.numeric), ~ round(., 3))) 
+
+```
+*Note*: Evaluate watersheds that have a large nutrient input from PSP sources.
+
+
+####################################################
+### 3. Evaluating the InVEST Nutrient Delivery Model
+####################################################
+
+This section describes an example of validating the InVEST NDR estimates using 
+the reference nutrient loads derived in section 2. The process focuses on the 
+calibration (evaluates model performance with parameter changes) and the model 
+validation (accuracy of the model predictions compared to reference values). 
+
+================================================================
+#### 3.1. InVEST NDR Model Calibration
+================================================================
+Model calibration evaluates the model's relative performance with parameter
+changes to select the most suitable values and reduce model uncertainty. The 
+estimates of the NDR are sensitive to the parameters that define the stream 
+network connectivity, such as the Borselli K (Kb) and Threshold Flow Accumulation 
+(TFA) (Anjinho et al., 2022; Redhead et al., 2018; Sharp et al., 2016). The TFA 
+is the required number of pixels to define a stream, and the Kb parameter establishes 
+the relationship between the watershed hydrologic connectivity and the percent of 
+nutrients that reach the stream. Model performance with different parameter settings
+can be tested by using regression approaches and selecting the best predictive parameter 
+combination.
+
+In this example, we evaluated TFA values (number of pixels) of 100, 500, and 1,000 and Borselli K Parameter of 0.5, 2, and 4 based on the suitable model performance range described by Redhead et al. (2018). We compared the InVEST nutrient export estimates against the reference annual average loads using the dredge function from the R MuMin package (Barton, 2015). All examples described were evaluated in drainage areas of Puerto Rico. 
+
+Example: Puerto Rico InVEST phosphorus exports estimates. Each column depicts the TFA and Kb values used to run the model. In addition, the drainage area in m2 is included. For more details about the inputs used in the InVEST model, refer to the Valladares-Castellanos et al. 2024.
+
+```{r}
+## Example: read in InVEST estimates
+Invest_Pexp_eg <- read_csv("InVEST_MS_Pexp.csv", # the phosphorus estimates are reported in Kg year-1
+    col_types = cols(MS_Name = col_character()))
+```
+
+```{r}
+## Example: Join the reference data to the InVEST data
+cal_data_eg <- Load_mean_eg %>%  #creating calibration data file
+  dplyr::mutate(site_no = paste("USGS", site_no, sep="-")) %>% #Add "institution abrev. to join"
+  dplyr::inner_join(Invest_Pexp_eg, by= c("site_no"="MS_Name"))  #Join InVEST estimates
+
+```
+
+
+----------------------------------------------------------------
+3.1.1 Evaluate Model Parameters
+----------------------------------------------------------------
+
+1. Spearman and Person's Correlation
+
+```{r}
+## Example: 1. Spearman and Person's Correlation between Reference data and InVEST estimates
+cor_pearson_eg <- cal_data_eg %>% 
+  correlate(method = "pearson" ) %>% 
+  focus(Ref_load_kgyear) 
+
+cor_spearman_eg <- cal_data_eg %>% 
+  correlate(method = "spearman" ) %>% 
+  focus(Ref_load_kgyear) 
+
+```
+*Note*: The InVEST estimates have similar correlation values with the Reference loads. 
+Therefore, it is essential to explore further accuracy assessment analysis (described in 
+the following code).
+
+
+2. Normalize data by area (km2)
+
+```{r}
+## Example: Normalizing the reference and InVEST estimates by area.
+
+# Convert area units from m2 to km2
+cal_data_eg$area_km2 <- cal_data_eg$area_m2/1000000 ## convert area to desired units (e.g.,km2).
+
+# Normalize by area
+cal_data_norm_eg <- cal_data_eg %>% 
+  dplyr::relocate(area_m2, .after = last_col()) %>%
+  dplyr::mutate_at(c(2:11),.funs = ~./area_km2)  ## normalize by area km2
+```
+*Note*: For further details about data pre-processing and model adjustment see Santon et al. 2023
+
+
+3. Compare reference nutrient loads against InVEST NDR estimates.
+We compared the InVEST nutrient export against the reference annual 
+average loads using the dredge function from the R MuMin package.
+
+```{r}
+## Example: Define the linear regression model: Reference load ~ InVEST estimates
+cal_data_norm_p_eg <- cal_data_norm_eg %>%
+  dplyr:: select(-c(area_km2, site_no, area_m2)) #excluding area variables in the model
+
+lm_cal_eg <- lm(Ref_load_kgyear ~., 
+                data= cal_data_norm_p_eg) 
+
+## Run the dredge function for model comparison. The subset function describes the variables 
+# that cannot be in the same model together. In addition, the number of predictors in the model is 
+# limited to one.
+
+options(na.action = "na.fail")
+
+dredge_cal_eg <- dredge(lm_cal_eg, 
+                        subset = !(p_export_catch_tfa1000_k05 && p_export_catch_tfa500_k05 && p_export_catch_tfa100_k05 && p_export_catch_tfa100_k2 && p_export_catch_tfa500_k2 && p_export_catch_tfa1000_k2 && p_export_catch_tfa100_k4 && p_export_catch_tfa500_k4 && p_export_catch_tfa1000_k4), 
+                        m.lim = c(0, 1), 
+                        extra = c("R^2", F = function(x)summary(x)$fstatistic[[1]]), 
+                        alist(AIC, BIC, ICOMP, Cp))
+
+View(dredge_cal_eg)
+
+```
+
+*Note*: Select the model with the highest R2, deltaAIC < 2, and which stream network 
+delineation is more similar to the actual stream network of the site. In this example, 
+we used TFA100 and Kb value of 4.
+
+
+```{r}
+### Example: evaluate best models (deltaAIC <2)
+lm_cal_best_eg <- lm(Ref_load_kgyear ~ p_export_catch_tfa100_k4, 
+                     data= cal_data_norm_p_eg)
+summary(lm_cal_best_eg)
+plot(lm_cal_best_eg)
+```
+
+*Note*: The parameters chosen in the case study were illustrative and not meant 
+to provide the full range of calibration options. For more details on adding 
+additional calibration values, see Redhead et al. (2018). 
+
+================================================================
+#### 3.2. InVEST NDR Model Validation
+================================================================
+To validate the InVEST NDR, an important final step is to compare the reference 
+nutrient loadings against the calibrated NDR model estimates adjusted by PSP. To 
+select the most appropriate distribution for the response variable and, therefore, 
+to choose the model that best fits the data. The fitdistrplus package can be used 
+to assess model distribution. An example of the process to use the package is available
+at  https://rpubs.com/blakeobeans/fitdistrplus. In addition, Santon et al. (2023) 
+describe the process of building a regression model.
+
+In the following example, we described a process using the selected calibration 
+parameters from the previous step (delta <2, higher r2, and the stream delineation 
+more similar to the actual stream network). We used the normalized data by area from 
+the previous step.
+
+
+```{r}
+## Example: Evaluate the Reference Load distribution for Puerto Rico watersheds.
+plotdist(cal_data_norm_eg$Ref_load_kgyear, histo = TRUE, demp = TRUE)
+
+# fitting distributions
+fit_wP_eg  <- fitdist(cal_data_norm_eg$Ref_load_kgyear, "weibull")
+fit_gP_eg  <- fitdist(cal_data_norm_eg$Ref_load_kgyear, "gamma")
+fit_lnP_eg <- fitdist(cal_data_norm_eg$Ref_load_kgyear, "lnorm")
+gofstat(list(fit_wP_eg, fit_gP_eg, fit_lnP_eg), fitnames = c("Weilbull", "Gamma", "Lnorm"))
+
+### plotting the distributions
+par(mfrow=c(2,2))
+plot.legend <- c("Weibull", "lognormal", "gamma")
+denscomp(list(fit_wP_eg, fit_gP_eg, fit_lnP_eg), legendtext = plot.legend)
+cdfcomp (list(fit_wP_eg, fit_gP_eg, fit_lnP_eg), legendtext = plot.legend)
+qqcomp  (list(fit_wP_eg, fit_gP_eg, fit_lnP_eg), legendtext = plot.legend)
+ppcomp  (list(fit_wP_eg, fit_gP_eg, fit_lnP_eg), legendtext = plot.legend)
+```
+*Note*: The distribution with the lowest AIC was the log-normal, which is defined 
+by a skewed distribution with positive values only. We could use a glm model with 
+a link "log" to address it.
+
+
+```{r}
+## Example:Evaluating the relationship between Reference loads as a function of the
+## InVEST estimates and the PSP loads for phosphorus in Puerto Rico.
+
+# Join the Datasets 
+val_data_eg <- cal_data_eg %>%
+  dplyr:: select(site_no, Ref_load_kgyear, p_export_catch_tfa100_k4, area_km2) %>%
+  dplyr::inner_join(PSP_total_eg, by= c("site_no"="MS_Name"))  
+
+# Normalize the data by area
+val_data_norm_eg <- val_data_eg %>% 
+  dplyr::relocate(area_km2, .after = last_col()) %>%
+  dplyr::mutate_at(c(2:6),.funs = ~./area_km2)
+
+# select data for the model
+val_data_norm_p_eg <- val_data_norm_eg %>%
+  dplyr:: select(Ref_load_kgyear, p_export_catch_tfa100_k4, PSP_mean_P_load_kgyear)
+
+# define the model
+glm_val_eg <- glm(Ref_load_kgyear~., 
+                  data= val_data_norm_p_eg, 
+                  family = gaussian(link='log'), 
+                  na.action = "na.fail")
+
+# Run the dredge function for model comparison. 
+
+dredge_val_eg <- dredge(glm_val_eg,
+                       m.lim = c(0, 2), 
+                       extra = c("R^2", F = function(x)summary(x)$fstatistic[[1]]), alist(AIC, BIC, ICOMP, Cp))
+
+View(dredge_val_eg)
+```
+
+*Note*: Select the model with the highest R2, deltaAIC < 2. If there is more than
+one model with deltaAIC <2, the models are not statistically different.
+
+
+```{r}
+### Example: evaluate the best models statistics (deltaAIC <2)
+glm_val_best_eg <- glm(Ref_load_kgyear ~ p_export_catch_tfa100_k4 + PSP_mean_P_load_kgyear, 
+                      data= val_data_norm_p_eg, 
+                      family = gaussian(link='log'))
+summary(glm_val_best_eg)
+plot(glm_val_best_eg)
+```
+*Note*: The variables are statistically significant with an R2 of 0.87, which means 
+the model explains 87% of the variance in the reference loads.
+
+
+References:
+
+Anjinho, P. d. S., Barbosa, M. A. G. A., & Mauad, F. F. (2022). Evaluation of InVEST’s Water Ecosystem Service Models in a Brazilian Subtropical Basin. Water. 
+
+Armstrong, D. S., Richards, T. A., & Parker, G. W. (2004). Evaluation of streamflow requirements for habitat protection by comparison to streamflow characteristics at index streamflow-gaging stations in southern New England. US Department of the Interior, US Geological Survey. 
+
+Barton, K. (2015). Package ‘mumin’. Version, 1(18), 439. 
+
+DeCicco, L., Hirsch, R., Lorenz, D., Watkins, D., & Johnson, M. (2023). dataRetrieval: R packages for discovering and retrieving water data available from U.S. federal hydrologic web services. . https://doi.org/doi:10.5066/P9X4L3GE
+
+EPA. (2023). ICIS-NPDES Discharge Points Summary. https://echo.epa.gov/tools/data-downloads/icis-npdes-discharge-points-download-summary 
+
+Lee, C. J., Hirsch, R. M., Schwarz, G. E., Holtschlag, D. J., Preston, S. D., Crawford, C. G., & Vecchia, A. V. (2016). An evaluation of methods for estimating decadal stream loads. Journal of Hydrology, 542, 185-203. https://doi.org/https://doi.org/10.1016/j.jhydrol.2016.08.059 
+
+National Water Quality Monitoring Council. (2020). Water Quality Portal (2000-2022. https://doi.org/https://doi.org/10.5066/P9QRKUVJ.
+
+Natural Capital Project. (2023). InVEST 3.14.0. In Stanford University, University of Minnesota, Chinese Academy of Sciences, The Nature Conservancy, World Wildlife Fund, Stockholm Resilience Centre and the Royal Swedish Academy of Sciences. https://naturalcapitalproject.stanford.edu/software/invest
+
+Redhead, J. W., May, L., Oliver, T. H., Hamel, P., Sharp, R., & Bullock, J. M. (2018). National scale evaluation of the InVEST nutrient retention model in the United Kingdom. Science of the Total Environment, 610-611, 666-677. https://doi.org/https://doi.org/10.1016/j.scitotenv.2017.08.092 
+
+Ries Iii, K. G., Guthrie, J. D., Rea, A. H., Steeves, P. A., & Stewart, D. W. (2008). StreamStats: A water resources web application [Report](2008-3067). (Fact Sheet, Issue. U. S. G. Survey. https://pubs.usgs.gov/publication/fs20083067
+
+Santon, M., Korner-Nievergelt, F., Michiels, N. K., & Anthes, N. (2023). A versatile workflow for linear modelling in R. Frontiers in Ecology and Evolution, 11, 1065273. 
+
+
+

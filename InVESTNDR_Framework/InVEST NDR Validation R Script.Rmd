@@ -1,7 +1,7 @@
 ---
 title: "InVEST NDR Validation R Script" 
-sub title: "How to Validate an Ecosystem Service Model? A Framework with InVEST 
-Nutrient Delivery Model (NDR)."
+sub title: "A Framework for validating the InVEST Nutrient Delivery Model (NDR) 
+using long-term water quality data from monitoring stations"
 author: "Valladares-Castellanos M, De Jesus Crespo R,  Xu J, Douthat T*"
 reference: "add journal reference"
 version date: "march 2024"

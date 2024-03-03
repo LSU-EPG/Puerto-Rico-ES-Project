@@ -421,7 +421,8 @@ Ref_model <- "Data_obs" %>% #The observed data object
 dplyr::group_by("site_no") %>%
   nest() %>%              #The nest function groups the data by monitoring 
                           #station (MS) and trains a regression for each site.                  
-dplyr::mutate(split= map(data, ~group_initial_split(., "Q_catep", prop = 7/10)), #randomly split 70% of the dataset within each MS,                                                                                   taking a random sample from each discharge category.                                                                                    Also available the "~initial_split" for random                                                                                         proportional sampling. Used when not all discharge                                                                                     categories are present in each MS.
+dplyr::mutate(split= map(data, ~group_initial_split(., "Q_catep", prop = 7/10)), #randomly split 70% of the dataset within each MS,                                                                                                                 taking a random sample from each discharge category.                                                                                                              Also available the "~initial_split" for random                                                                                                                    proportional sampling. Used when not all discharge 
+                                                                                  categories are present in each MS.
          train70 = map(split, ~training(.)),      #Select the 70% sample to fit the model
          test30  = map(split, ~testing(.)),       #Select th 30% sample to validate the model 
          fit = map(train70, ~lm("log(Load)" ~ "Log(discharge)", data = .)), #model function
@@ -857,9 +858,15 @@ nutrients that reach the stream. Model performance with different parameter sett
 can be tested by using regression approaches and selecting the best predictive parameter 
 combination.
 
-In this example, we evaluated TFA values (number of pixels) of 100, 500, and 1,000 and Borselli K Parameter of 0.5, 2, and 4 based on the suitable model performance range described by Redhead et al. (2018). We compared the InVEST nutrient export estimates against the reference annual average loads using the dredge function from the R MuMin package (Barton, 2015). All examples described were evaluated in drainage areas of Puerto Rico. 
+In this example, we evaluated TFA values (number of pixels) of 100, 500, and 1,000 and Borselli 
+K Parameter of 0.5, 2, and 4 based on the suitable model performance range described by Redhead 
+et al. (2018). We compared the InVEST nutrient export estimates against the reference annual average
+loads using the dredge function from the R MuMin package (Barton, 2015). All examples described were
+evaluated in drainage areas of Puerto Rico. 
 
-Example: Puerto Rico InVEST phosphorus exports estimates. Each column depicts the TFA and Kb values used to run the model. In addition, the drainage area in m2 is included. For more details about the inputs used in the InVEST model, refer to the Valladares-Castellanos et al. 2024.
+Example: Puerto Rico InVEST phosphorus exports estimates. Each column depicts the TFA and Kb values used 
+to run the model. In addition, the drainage area in m2 is included. For more details about the inputs 
+used in the InVEST model, refer to the Valladares-Castellanos et al. 2024.
 
 ```{r}
 ## Example: read in InVEST estimates
@@ -1050,27 +1057,44 @@ the model explains 87% of the variance in the reference loads.
 
 References:
 
-Anjinho, P. d. S., Barbosa, M. A. G. A., & Mauad, F. F. (2022). Evaluation of InVEST’s Water Ecosystem Service Models in a Brazilian Subtropical Basin. Water. 
+Anjinho, P. d. S., Barbosa, M. A. G. A., & Mauad, F. F. (2022). Evaluation of InVEST’s 
+Water Ecosystem Service Models in a Brazilian Subtropical Basin. Water. 
 
-Armstrong, D. S., Richards, T. A., & Parker, G. W. (2004). Evaluation of streamflow requirements for habitat protection by comparison to streamflow characteristics at index streamflow-gaging stations in southern New England. US Department of the Interior, US Geological Survey. 
+Armstrong, D. S., Richards, T. A., & Parker, G. W. (2004). Evaluation of streamflow 
+requirements for habitat protection by comparison to streamflow characteristics at index 
+streamflow-gaging stations in southern New England. US Department of the Interior, US Geological Survey. 
 
 Barton, K. (2015). Package ‘mumin’. Version, 1(18), 439. 
 
-DeCicco, L., Hirsch, R., Lorenz, D., Watkins, D., & Johnson, M. (2023). dataRetrieval: R packages for discovering and retrieving water data available from U.S. federal hydrologic web services. . https://doi.org/doi:10.5066/P9X4L3GE
+DeCicco, L., Hirsch, R., Lorenz, D., Watkins, D., & Johnson, M. (2023). dataRetrieval: 
+R packages for discovering and retrieving water data available from U.S. federal hydrologic 
+web services. . https://doi.org/doi:10.5066/P9X4L3GE
 
-EPA. (2023). ICIS-NPDES Discharge Points Summary. https://echo.epa.gov/tools/data-downloads/icis-npdes-discharge-points-download-summary 
+EPA. (2023). ICIS-NPDES Discharge Points Summary. 
+https://echo.epa.gov/tools/data-downloads/icis-npdes-discharge-points-download-summary 
 
-Lee, C. J., Hirsch, R. M., Schwarz, G. E., Holtschlag, D. J., Preston, S. D., Crawford, C. G., & Vecchia, A. V. (2016). An evaluation of methods for estimating decadal stream loads. Journal of Hydrology, 542, 185-203. https://doi.org/https://doi.org/10.1016/j.jhydrol.2016.08.059 
+Lee, C. J., Hirsch, R. M., Schwarz, G. E., Holtschlag, D. J., Preston, S. D., 
+Crawford, C. G., & Vecchia, A. V. (2016). An evaluation of methods for estimating decadal 
+stream loads. Journal of Hydrology, 542, 185-203. https://doi.org/https://doi.org/10.1016/j.jhydrol.2016.08.059 
 
-National Water Quality Monitoring Council. (2020). Water Quality Portal (2000-2022. https://doi.org/https://doi.org/10.5066/P9QRKUVJ.
+National Water Quality Monitoring Council. (2020). Water Quality Portal (2000-2022. 
+https://doi.org/https://doi.org/10.5066/P9QRKUVJ.
 
-Natural Capital Project. (2023). InVEST 3.14.0. In Stanford University, University of Minnesota, Chinese Academy of Sciences, The Nature Conservancy, World Wildlife Fund, Stockholm Resilience Centre and the Royal Swedish Academy of Sciences. https://naturalcapitalproject.stanford.edu/software/invest
+Natural Capital Project. (2023). InVEST 3.14.0. In Stanford University, University of 
+Minnesota, Chinese Academy of Sciences, The Nature Conservancy, World Wildlife Fund, 
+Stockholm Resilience Centre and the Royal Swedish Academy of Sciences.
+https://naturalcapitalproject.stanford.edu/software/invest
 
-Redhead, J. W., May, L., Oliver, T. H., Hamel, P., Sharp, R., & Bullock, J. M. (2018). National scale evaluation of the InVEST nutrient retention model in the United Kingdom. Science of the Total Environment, 610-611, 666-677. https://doi.org/https://doi.org/10.1016/j.scitotenv.2017.08.092 
+Redhead, J. W., May, L., Oliver, T. H., Hamel, P., Sharp, R., & Bullock, J. M. (2018). National 
+scale evaluation of the InVEST nutrient retention model in the United Kingdom. Science of 
+the Total Environment, 610-611, 666-677. https://doi.org/https://doi.org/10.1016/j.scitotenv.2017.08.092 
 
-Ries Iii, K. G., Guthrie, J. D., Rea, A. H., Steeves, P. A., & Stewart, D. W. (2008). StreamStats: A water resources web application [Report](2008-3067). (Fact Sheet, Issue. U. S. G. Survey. https://pubs.usgs.gov/publication/fs20083067
+Ries Iii, K. G., Guthrie, J. D., Rea, A. H., Steeves, P. A., & Stewart, D. W. (2008). StreamStats: 
+A water resources web application [Report](2008-3067). (Fact Sheet, Issue. U. S. G. Survey. 
+https://pubs.usgs.gov/publication/fs20083067
 
-Santon, M., Korner-Nievergelt, F., Michiels, N. K., & Anthes, N. (2023). A versatile workflow for linear modelling in R. Frontiers in Ecology and Evolution, 11, 1065273. 
+Santon, M., Korner-Nievergelt, F., Michiels, N. K., & Anthes, N. (2023). A versatile workflow for 
+linear modelling in R. Frontiers in Ecology and Evolution, 11, 1065273. 
 
 
 

@@ -36,7 +36,7 @@ each chunk as an "_eg" object).
 
 Finally, before using the script we suggest to download the supporting .csv files
 used for the example sections (EPA PointSource Pollution by HUC12, InVEST_MS_Pexp, HUC12_MS),
-and save them in the working directory alomg with the R script.
+and save them in the working directory along with the R script.
 
 _______________________________________________________________________________
 ###  InVEST NDR Validation TEMPLATE

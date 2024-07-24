@@ -647,10 +647,10 @@ Discharge_ref <- Discharge %>%
   dplyr::mutate(exp_intercept = exp(`(Intercept)`)) %>% #exponenting the model intercept
   dplyr::mutate(Year = substr(Date,1,4))  #creating a calendar year column (the data has water year)
 
-# estimate nutrient loads based on equation NL= exp(intercept)*discharge*(coefficient_LogQ) 
+# estimate nutrient loads based on equation NL= exp(intercept)*discharge^(coefficient_LogQ) 
 Loads_day <- Discharge_ref %>%
   dplyr:: group_by(site_no) %>%
-  dplyr:: mutate(Load_gseg = exp_intercept * Q * LogQ) %>% #Load in g s-1
+  dplyr:: mutate(Load_gseg = exp_intercept * Q ^ LogQ) %>% #Load in g s-1
   dplyr:: mutate(load_gday = Load_gseg *3600*24) #Load g day-1
 
 # estimate yearly loads and unit conversion
@@ -688,10 +688,10 @@ Discharge_ref_eg <- Sample_PR_Q.df_eg %>%
   dplyr::mutate(exp_intercept = exp(`(Intercept)`)) %>% #exponenting the model intercept
   dplyr::mutate(Year = substr(Date,1,4))  #creating a calendar year column (the data has water year)
 
-# estimate nutrient loads based on equation NL= exp(intercept)*discharge*(coefficient_LogQ) 
+# estimate nutrient loads based on equation NL= exp(intercept)*discharge^(coefficient_LogQ) 
 Loads_day_eg <- Discharge_ref_eg %>%
   dplyr:: group_by(site_no) %>%
-  dplyr:: mutate(Load_gseg = exp_intercept * Q * LogQ) %>% #Load in g s-1
+  dplyr:: mutate(Load_gseg = exp_intercept * Q ^ LogQ) %>% #Load in g s-1
   dplyr:: mutate(load_gday = Load_gseg *3600*24) #Load gday-1
 
 # estimate yearly loads and unit conversion

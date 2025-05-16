@@ -11,8 +11,8 @@ Authors: Valladares-Castellanos M, De Jesus Crespo R,  Xu J, Douthat T*
 *Corresponding Author
   
 Reference: "Valladares-Castellanos M, De Jesus Crespo R,  Xu J, Douthat T. 2024. A framework for validating watershed ecosystem service models 
-using United States long-term water quality data: Applications with the InVEST Nutrient Delivery (NDR) model in Puerto Rico. Science of the Total Environment (submitted)."
-version date: "June 2024"
+using United States long-term water quality data: Applications with the InVEST Nutrient Delivery (NDR) model in Puerto Rico. Science of the Total Environment. https://doi.org/10.1016/j.scitotenv.2024.175111"
+version date: "May 2025"
 
 Github: "https://github.com/LSU-EPG/Puerto-Rico-ES-Project/blob/main/InVESTNDR_Framework/InVEST%20NDR%20Validation%20R%20Script.Rmd"
 

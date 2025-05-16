@@ -1,0 +1,387 @@
+---
+title: "Evaluating Spatio-Temporal Data Scarcity in Water Quality Monitoring"
+publication: "Addressing spatial and temporal data scarcity in water quality monitoring using machine learning for long-term ecosystem service calibration and validation" 
+author: "Valladares-Castellanos M, De Jesus Crespo R, Douthat T"
+github: https://github.com/LSU-EPG/Puerto-Rico-ES-Project/tree/main/Data_Scarcity_Framework
+---
+
+### General Description:
+This initial step of the methodological framework (Section XX) focuses on assessing the availability 
+and quality of water monitoring data within the study area. 
+The accompanying script provides example code to:
+
+1. retrieve water quality data (using the TADA and dataRetrieval packages),
+
+2. identify watersheds with sufficient observational records,
+
+3. train a machine learning (ML) model to impute missing temporal values, and
+
+4. evaluate imputation performance to select satisfactory reference watersheds.
+
+The example demonstrates this process for Puerto Rico, using water quality data
+between 1950 and 2020.
+
+
+#############################################
+### 1. Install libraries and load packages
+#############################################
+
+1.1. installing the libraries
+```{r}
+## Suggested Packages
+packages <- c("tidyverse","dplyr","tidyr", "EGRET", "dataRetrieval", 
+              "broom", "mgcv", "purrr", "readr", "rsample",
+              "plyr", "MuMIn", "ggplot2", "skimr", "randomForest", "missForest",
+              "nplyr", "gapminder", "sf", "data.table", "moments", "sjPlot", "sjmisc", "sjlabelled")
+
+## Install packages:
+inst <- packages[1:16] %in% installed.packages()
+if(length(packages[!inst]) > 0) install.packages(packages[!inst])
+
+## Load packages:
+lapply(packages, require, character.only = TRUE)
+```
+
+1.2. Install TADA from github repository (not available in CRAN)
+More information at: https://usepa.github.io/EPATADA/articles/TADAModule1.html
+```{r}
+install.packages("remotes",
+                 repos = "http://cran.us.r-project.org"
+                 )
+library(remotes)
+remotes::install_github("USEPA/EPATADA",
+                        ref = "develop", #the name of the reference branch constantly changes so see the github for updates
+                        dependencies = TRUE
+                        ) 
+                        
+library(EPATADA)
+```
+
+
+#############################################
+### 2. Data Retrieval 
+#############################################
+
+2.1. Evaluate Water Quality Parameter Codes before retrieving the data 
+```{r}
+parameterlist <- parameterCdFile
+```
+
+2.2. Search for data available; 
+
+2.2.1. Example for Phosphorus using TADA
+```{r, warning=FALSE, message=FALSE}
+tada_data <-  TADA_DataRetrieval(characteristicName = c("Phosphorus"), 
+                                    startDate = "1950-01-01",
+                                    endDate = "2020-12-31",
+                                    statecode = "PR",  #code for Puerto Rico
+                                    applyautoclean = FALSE)
+
+```
+
+2.2.2. Example for stream flow using dataRetrieval
+```{r}
+#Identify sites with stream flow data
+#Retrieve sites with data
+sites_streamflow <- whatNWISsites(
+  bBox = c(-67.940244,17.912176,-65.223149,18.516095), #Puerto Rico lat long bounding box
+  parameterCd = "00060",  #Daily stream flow code from the 2.1 parameter list
+  hasDataTypeCd = "dv")  #mean daily values
+
+#create a list of the sites
+listsites <- as.list(sites_streamflow $site_no) #site ID
+
+#apply a function to retrieve data available in each site from the list
+# Define parameters for the search
+Parameter <- c("00060")   #Daily stream flow code from the 2.1 parameter list
+StartDate <- "1950-01-01"
+EndDate <- "2020-12-31"
+
+#Retrieve data
+dataRetrieval_data <- lapply(listsites,
+                    FUN= function(x){
+readNWISDaily(x, Parameter, StartDate, EndDate, convert = TRUE)})
+```
+*Note*: Drainage areas for the retrieved monitoring sites can be delineated using the provided 
+latitude and longitude coordinates with tools such as USGS StreamStats or GIS software platforms like ArcGIS.
+
+
+2.3. Filter for Water Quality type based on research interest
+```{r, warning=FALSE, message=FALSE}
+tada_data <- TADA_AnalysisDataFilter(tada_data,
+  clean = TRUE,
+  surface_water = TRUE,
+  ground_water = FALSE,
+  sediment = FALSE
+)
+
+#Adjust names for comprehension
+tada_data <- tada_data %>%
+  dplyr:: rename("USGS_MS" = "MonitoringLocationIdentifier", #Monitoring station ID
+                 "Date" = "ActivityStartDate", #Date and time Sampling was done
+                 "Parameter" = "TADA.CharacteristicName", #Parameter Retrieved
+                 "Concentration" = "ResultMeasureValue",  #Value
+                 "unit" = "ResultMeasure.MeasureUnitCode") #units reported
+```
+
+*Note*: At this point it is recommended to evaluate data units, duplicates, and 
+apply the necessary data conversions and standardization before proceeding to the 
+next step.
+
+2.4. Evaluate number of observations available per site
+```{r}
+nutrient_sites <- tada_data %>%
+  dplyr:: group_by(USGS_MS, Parameter) %>%
+  dplyr:: summarise(n= n())  # Number of sites with data available and n count of observations available
+```
+*Note*: At this point it is recommended to plot the data per site to evaluate temporal distribution.
+Set a threshold of minimum number of observations to start with (e.g., 30 observations based on paper findings).
+
+
+#############################################
+### 3. Fill temporal data gaps using ML
+#############################################
+
+We used Random Forest as an example of a direct sampling ML approach, which does not 
+assume specific data distributions and is well-suited for handling complex dependencies. 
+It provides accurate imputations by leveraging patterns and similarities across observed data (Dembele et al. 2019).
+
+To train and validate the Random Forest model, we artificially introduced missing values 
+by replacing a subset of reference observations with NA, allowing us to evaluate imputation 
+accuracy at each step of the process.
+
+3.1. Prepare the data for Random Forest
+```{r}
+# Create time columns
+tada_data <- tada_data %>%
+  dplyr:: mutate(Year = substr(Date, 1,4),
+                 Month = substr(Date, 6,7),
+                 Day= substr(Date, 9,10)) %>%
+  dplyr:: select(USGS_MS,Parameter,Year, Month, Day,conc_gm3) 
+```
+
+3.2. Create function artificially introduced missing values
+For more information visit:
+https://stackoverflow.com/questions/30904564/generate-random-missing-values-in-a-dataframe-using-r
+
+```{r}
+# using prodNA to add NA 
+fn.df.add.NA <- function(df, var.name, prop.of.missing) {
+  df.buf <- subset(df, select=c(var.name))                      # Select variable
+  require(missForest, quietly = T)
+  df.buf <- prodNA(x = df.buf, prop.of.missing)                 # change original value to NA in casual sequence
+  detach("package:missForest", unload=TRUE)
+
+  df.col.order <- colnames(x = df)                              # save the column order       
+  df <- subset(df, select=-c(which(colnames(df)==var.name)))    # drop the variable with no NAs    
+  df <- cbind(df, df.buf)                                       # add the column with NA          
+  df <- subset(df, select=df.col.order)                         # restore the original order sequence of the dataframe
+
+  return(df)  
+}
+```
+
+3.3. Nest the dataset per site and split it 70/30 and add NA 
+For model evaluation, the dataset was nested by monitoring site and split into 70% for training 
+and 30% for validation; missing values (NA) were then introduced into dataset subsets to
+assess the imputation performance of the Random Forest model.
+```{r, warning=FALSE}
+rf_nutrients <- tada_data %>% 
+  dplyr::group_by(USGS_MS, Parameter) %>%  #Site and Nutrient of Interest
+  nest() %>%                                 
+  dplyr::mutate(split= map(data, ~initial_split(., prop = 7/10)), 
+                train70 = map(split, ~training(.)),      #Select the 70% to train the random forest algorithm
+                test30  = map(split, ~testing(.)),       # 30% to validate prediction 
+                train_na = map(train70, ~fn.df.add.NA(df =.x, var.name = "conc_gm3", prop.of.missing = 0.3)), #add example 30% of NA to train data
+                test_na = map(test30, ~fn.df.add.NA(df =.x, var.name = "conc_gm3", prop.of.missing = 0.3))) #add example 30% of NA to test data
+```
+
+3.4. Impute the NA for the training dataset
+```{r, warning=FALSE}
+rf_nutrients <- rf_nutrients %>%
+  dplyr:: mutate(imp_train = map(train_na, ~missForest::missForest(.x)$ximp)) #impute the NA values
+```
+
+3.5. Combine imputed train data and 30% test data
+```{r}
+rf_nutrients <- rf_nutrients %>%
+  dplyr:: mutate(train_test = map2(test_na, imp_train, ~rbind(.x, .y)))
+```
+
+3.6. Train the random forest 
+Using as example the following function (Apply here the function that relates the system of interest):
+Reference Nutrient Concentration ~ imputed nutrient concentration from 70% dataset + time variability (Year/month)
+
+```{r, warning=FALSE}
+#bind the 70 train imputed data and the complete 70% reference observations (without artificial NA)
+rf_nutrients <- rf_nutrients %>%
+  dplyr::mutate(imp70_train70= map2(imp_train, train70, ~left_join(.x, .y, by = c("Year", "Month","Day")))) 
+
+# train the RF algorithm  
+rf_nutrients <- rf_nutrients %>%
+  mutate(ref = map(imp70_train70, ~randomForest(conc_gm3_reference ~ conc_gm3_imputed + Month, data = .x)))
+```
+
+3.7.  Apply the missForest function to impute the 30% NAs in the test dataset
+```{r}
+rf_nutrients <- rf_nutrients %>%
+  mutate(imp_test = map(train_test, ~missForest::missForest(.x)$ximp)) #impute na values
+```
+
+3.8. Improve model imputation on the test data using the trained random forest model.
+```{r}
+rf_nutrients <- rf_nutrients %>%
+  dplyr::mutate(pred_test = map2(ref, imp_test, ~predict(.x, .y, type = "response"))) 
+```
+
+
+#############################################
+### 4. Evaluate ML Prediction Errors
+#############################################
+
+Example estimating error as residual sum of squares and the Nash-Sutcliffe Efficiency (NSE).
+
+4.1. Unnest and prepare the data
+```{r}
+RF_error <- rf_nutrients %>%
+  dplyr::mutate(imp_pred = map2(imp_test, pred_test, ~rename(cbind(.x, .y), conc_gm3_predrf = .y))) %>%
+  # Unnest and combine all datasets in one step
+  transmute(
+    USGS_MS, Parameter,
+    data = map(data, ~mutate(.x, source = "data")),
+    data_na = map(data_na, ~mutate(.x, source = "data_na")),
+    imp_pred = map(imp_pred, ~mutate(.x, source = "imp_pred"))
+  ) %>%
+  pivot_longer(cols = starts_with("data"), names_to = "type", values_to = "df") %>%
+  unnest(df) %>%
+  pivot_wider(
+    names_from = type,
+    values_from = c(conc_gm3, conc_gm3_na, conc_gm3imp, conc_gm3_predrf),  #gets the initial, artificial NA, imputed and predicted values
+    names_sep = "_"
+  ) %>%
+  rename(
+    conc_gm3 = conc_gm3_data,  #Initial reference observations
+    conc_gm3_na = conc_gm3_na_data_na, #Data with NAs added
+    conc_gm3imp = conc_gm3imp_imp_pred, #Initial model imputation
+    conc_gm3_predrf = conc_gm3_predrf_imp_pred #Predicted dataset with trained model
+  ) %>%
+  filter(!is.na(conc_gm3))
+```
+
+4.2. Calculate model performance metrics
+
+Legend:
+_i initial imputation error
+_p predicted model error
+```{r}
+# Calculate model performance metrics
+RF_error_sum <- RF_error %>%
+  group_by(USGS_MS, Parameter) %>%
+  summarize(
+    total_ss = sum((conc_gm3 - mean(conc_gm3))^2),
+    residual_ss_i = sum((conc_gm3 - conc_gm3imp)^2),
+    residual_ss_p = sum((conc_gm3 - conc_gm3_predrf)^2),
+    Nash_coef_i = 1 - residual_ss_i / total_ss,
+    Nash_coef_p = 1 - residual_ss_p / total_ss,
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    r.squared_i = 1 - (residual_ss_i / total_ss),
+    adj.r.squared_i = 1 - ((1 - r.squared_i) * (n - 1) / (n - 2)),
+    r.squared_p = 1 - (residual_ss_p / total_ss),
+    adj.r.squared_p = 1 - ((1 - r.squared_p) * (n - 1) / (n - 2)),
+    performance_i = case_when(
+      Nash_coef_i >= 0.75 ~ "Very good",
+      Nash_coef_i >= 0.65 ~ "Good",
+      Nash_coef_i > 0.5 ~ "Satisfactory",
+      TRUE ~ "Unsatisfactory"
+    ),
+    performance_p = case_when(
+      Nash_coef_p >= 0.75 ~ "Very good",
+      Nash_coef_p >= 0.65 ~ "Good",
+      Nash_coef_p > 0.5 ~ "Satisfactory",
+      TRUE ~ "Unsatisfactory"
+    )
+  )
+
+# Filter acceptable predictions
+RF_Satisfactory_Sites <- RF_error_sum %>%
+  filter(performance_p != "Unsatisfactory")
+```
+
+*Note*: "RF_Satisfactory_Sites" are the sites with satisfactory data predictions used as
+reference locations. 
+
+#############################################
+### 5. Predict temporal data scarcity for the 
+### satisfactory reference locations 
+#############################################
+
+5.1. Prepare the dataset
+```{r}
+#Create Reference dataset to include each calendar date of the time period of interest
+filled_data <- as.data.frame(seq(as.Date("1950-01-01"), as.Date("2020-12-31"), by="days"))
+
+#Join the satisfactory reference sites 
+filled_data <- crossing(filled_data, RF_Satisfactory_Sites)
+
+#Join the nutrient obaservations retrieved
+filled_data <- filled_data %>%
+  dplyr:: left_join(tada_data, by=c("Date", "USGS_MS", "Parameter"))
+
+```
+
+*Note*: The dataset will show the actual Dates without observations only for the 
+satisfactory reference sites. Make sure the format of date and labels of the dataset fits the 
+same structure of the RF dataset.
+
+5.2. Nest the Data by site
+```{r}
+filled_data <- filled_data %>%
+  dplyr:: group_by(USGS_MS, Parameter) %>%  #if multiple parameters, group by parameter as well
+  nest()
+```
+
+5.3. Join the validated RF model
+```{r}
+#Select columns of interest
+rf_nutrients <- rf_nutrients %>%
+  dplyr::select(USGS_MS, Parameter, ref) #ref in the RF model
+
+#Join the datasets
+filled_data <-filled_data %>%
+  dplyr::left_join(rf_nutrients, by = c("USGS_MS", "Parameter"))
+
+```
+
+5.4. Impute the NAs
+```{r}
+filled_data <- filled_data %>% 
+  dplyr::mutate(imp_data = map(data, ~missForest::missForest(.x)$ximp))
+```
+
+5.5. Refine prediction based on validated RF model
+```{r}
+filled_data <- filled_data %>% 
+  dplyr::mutate(pred_data = map2(ref, imp_data, ~predict(.x, .y, type = "response", do.trace = TRUE)))
+```
+
+*Note*: the final product of this step is the filled nutrients dataset, that will be used
+later in the methodological framework to validate water quality ES model predictions. It is suggested to apply the same process
+for stream flow and then estimate average yearly loads for the time period of interest following Valladares-Castellanos et. al. 2024
+process.
+
+#############################################
+### 6. References
+#############################################
+
+DeCicco, L., Hirsch, R., Lorenz, D., Watkins, D., & Johnson, M. (2023). dataRetrieval: R packages for discovering and retrieving water data available from U.S. federal hydrologic web services. . https://doi.org/doi:10.5066/P9X4L3GE
+
+Dembélé, M., Oriani, F., Tumbulto, J., Mariéthoz, G., & Schaefli, B. (2019). Gap-filling of daily streamflow time series using Direct Sampling in various hydroclimatic settings. Journal of Hydrology, 569, 573-586. https://doi.org/https://doi.org/10.1016/j.jhydrol.2018.11.076 
+
+National Water Quality Monitoring Council. (2020). Water Quality Portal (2000-2022. https://doi.org/https://doi.org/10.5066/P9QRKUVJ.
+
+Natural Capital Project. (2023). InVEST 3.14.0. In Stanford University, University of Minnesota, Chinese Academy of Sciences, The Nature Conservancy, World Wildlife Fund, Stockholm Resilience Centre and the Royal Swedish Academy of Sciences. https://naturalcapitalproject.stanford.edu/software/invest
+
+Valladares-Castellanos, M., de Jesús Crespo, R., Xu, Y. J., & Douthat, T. H. (2024). A framework for validating watershed ecosystem service models in the United States using long-term water 

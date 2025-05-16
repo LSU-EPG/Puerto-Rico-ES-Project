@@ -1,0 +1,272 @@
+---
+title: "ES Model Calibration and Validation using the Reference Watersheds"
+publication: "Addressing spatial and temporal data scarcity in water quality monitoring using machine learning for long-term ecosystem service calibration and validation" 
+author: "Valladares-Castellanos M, De Jesus Crespo R, Douthat T"
+github: https://github.com/LSU-EPG/Puerto-Rico-ES-Project/tree/main/Data_Scarcity_Framework
+---
+
+### General Description:
+This third step of the methodological framework (Section XX) focuses on selecting optimal 
+model parameters using 70% of the reference watersheds for calibration and evaluating model 
+performance with the remaining 30% for validation.
+
+The accompanying script demonstrates an example on how to:
+
+1. Consolidate output tables from the iterative model runs generated in Step 2,
+
+2. Define a function to split the reference dataset into calibration and validation subsets,
+
+3. Identify optimal parameter values by comparing model predictions with observed data, and
+
+4. Validate the selected parameters and assess overall model accuracy.
+
+The example applies this workflow to Puerto Rico using water quality data from 1950 to 2020.
+
+
+#############################################
+### 1. Install libraries and load packages
+#############################################
+
+1.1. installing the libraries
+```{r}
+## Suggested Packages
+packages <-  c("tidyverse","dplyr","tidyr", "foreign",
+              "broom", "purrr", "readr", "rsample",
+              "MuMIn", "leaps", "skimr", "sf", "stringr")
+
+## Install packages:
+inst <- packages[1:16] %in% installed.packages()
+if(length(packages[!inst]) > 0) install.packages(packages[!inst])
+
+## Load packages:
+lapply(packages, require, character.only = TRUE)
+```
+
+#############################################
+### 2. Consolidate outputs from batch model execution
+#############################################
+
+
+2.1. Define the directory containing the .gpkg files
+```{r}
+gpkg_dir <- "path"
+
+```
+
+2.2. List all .gpkg files in the directory
+```{r}
+gpkg_files <- list.files(gpkg_dir, pattern = "\\.gpkg$", full.names = TRUE)
+
+```
+
+2.3. Initialize an empty list to combine and store the ES model outputs
+```{r}
+
+# Initialize list
+dbf_list <- list()
+
+# Initialize a variable to store the combined data frame
+df <- NULL
+
+# Loop through each .gpkg file
+for (gpkg_file in gpkg_files) {
+  
+  # Extract the filename without extension
+  file_name <- basename(gpkg_file)
+  
+  # Extract portions of the filename using regular expressions
+  # Example to extract the "TFA50_kb0.5" parameter portion 
+  prefix <- str_extract(file_name, "TFA[0-9.]+_kb[0-9.]+")
+  
+  # Read the .gpkg file using the 'sf' package (it will load all layers in the .gpkg)
+  layers <- st_layers(gpkg_file)
+  
+  # If the .gpkg file contains a layer with a .dbf table, extract it
+  for (layer_name in layers$name) {
+    # Read the layer's geometry and attributes
+    sf_data <- st_read(gpkg_file, layer = layer_name)
+    
+    # Extract the attribute table as a data frame (without geometry)
+    dbf_data <- st_drop_geometry(sf_data)
+    
+    # Select only column 1 and columns 11 to 19 or column number with the information of interest (adjusting for zero-indexing)
+    dbf_data <- dbf_data %>%
+      select(1,13:14,16,18:19)  
+    
+    # Rename the columns based on the extracted prefix from the filename
+    colnames(dbf_data)[-1] <- paste0(prefix, "_", colnames(dbf_data)[-1])
+    
+    # If this is the first dataset, initialize the combined_df with it
+    if (is.null(df)) {
+      df <- dbf_data
+    } else {
+      # Join the current dbf_data to the combined_df based on a common column (e.g., "ID")
+      # Adjust "ID" to whatever your common column is named
+      df <- full_join(df, dbf_data, by = c("Name"))
+    }
+  }
+}
+
+```
+
+
+#############################################
+### 3. Split the dataset for Calibration and Validation
+#############################################
+
+3.1. Join the Reference data with the ES model data
+```{r}
+data <- filled_data %>%  #Reference dataset in the form of yearly average loadings for the temporal interval of interest
+  dplyr::left_join(df, by = c("USGS_MS" = "Name", "Lulc" = "year", "cluster" = "cluster"))
+```
+
+3.2 Split the dataset for Calibration and Validation
+```{r}
+##Split the dataset
+split_function<- data %>%
+  dplyr::group_by(cluster) %>%  #watershed cluster
+  group_split() %>%
+  lapply(function(df) {
+    split <- initial_split(df, prop = 0.7) # 70% for calibration, 30% for validation
+    list(calibrate = training(split), validate = testing(split))
+  })
+
+## Extract subsets
+calibration_70 <- bind_rows(lapply(split_function, function(x) x$calibrate))
+validation_30 <- bind_rows(lapply(split_function, function(x) x$validate))
+```
+*Note*: It is recommended to verify the split to identify enough balance of the sites selection per 
+group.
+
+#############################################
+### 4. Calibration
+#############################################
+
+4.1. Nest the dataset
+```{r}
+calibration_70 <- calibration_70 %>% 
+  dplyr::group_by(cluster) %>%
+  nest() 
+```
+
+4.2. Select suitable parameter values
+```{r}
+## Fit a model within each group to select the best parameter
+calibration_70 <- calibration_70 %>%
+  dplyr::mutate(
+    log_data = map(data, ~ mutate(.x, across(where(is.numeric), ~ log(. + 1)))),   
+    # Fit the best model using regsubsets (with nvmax = 1 to restrict to one predictor)
+    model = map(log_data, ~ regsubsets(Ref_data ~ ., # Ref_values as a function of all ES model estimates
+                                       data = .x, 
+                                       nvmax = 1, 
+                                       nbest= 5,  #select for example the five best models
+                                       really.big = T)),  
+    model_summary = map(model, ~ summary(.x, data = .)))
+
+```
+
+4.3. Evaluate best parameter selected
+```{r}
+#get the best models stats
+calibration_70 <- calibration_70 %>%
+  dplyr:: mutate(model_stats = map(model_summary, ~data.frame(
+    r2 = .x$rsq,
+    adjr2 = .x$adjr2,
+    BIC = .x$bic,
+    cp = .x$cp,
+    RSS = .x$rss
+    )))
+
+
+#get the best models suitable parameter values
+calibration_70 <- calibration_70 %>%
+  dplyr:: mutate(selected_vars = map(model_summary, ~data.frame(.x$which)))
+
+#create dataframe with the summary
+calibration_70 <- calibration_70 %>%
+  dplyr:: mutate(results_df = map2(selected_vars, model_stats, ~data.frame(
+    Model = 1:nrow(.x), # Create a column for model numbers
+    Rsquared = .y$r2,               # R-squared values
+    Adj_Rsquared = .y$adjr2,        # Adjusted R-squared values
+    BIC = .y$BIC,                   # BIC values
+    CP = .y$cp,                     #Cp statistic (Mallows' Cp)
+    RSS = .y$RSS))) %>%             #Residual sum of squares     
+  dplyr:: mutate(results_sum = map2(results_df, selected_vars, ~bind_cols(.x,.y)))
+
+
+## Unnest the summary table and arrange dataset for interpretation
+Model_selection <- calibration_70 %>%
+  select(cluster, results_sum) %>%
+  unnest(results_sum) %>%
+  pivot_longer(names_to = "Variable", 
+               values_to = "Included", 
+               cols = 8:128) %>% #df values extent
+  filter(Included == TRUE,
+         Variable != "X.Intercept.") 
+```
+
+
+
+#############################################
+### 5. Validation
+#############################################
+
+Example using the suitable parameters found in the case study area:
+For cluster 1 TFA 50 and Kb 1.5
+For cluster 2 TFA 50 and Kb 4.0
+
+5.1. Nest the dataset by watershed group
+```{r}
+## nest the data
+validation_30 <- validation_30 %>%
+  dplyr::select(1:3, TFA50_kb1.5, TFA50_kb4.0) %>%
+  dplyr::group_by(cluster) %>%
+  nest()
+```
+
+5.2. Define function to fit model based on watershed cluster
+```{r}
+fit_model <- function(cluster, data) {
+  if (cluster == 1) {  #model watershed group 1
+    model <- lm(log(Ref_data) ~ log(TFA50_kb1.5), data = data)
+  } else if (cluster == 2) { #model watershed group 2
+    model <- lm(log(Ref_data) ~ log(TFA50_kb4.0), data = data)
+  } else {
+    return(NULL) # Skip other clusters
+  }
+}
+
+```
+
+5.3. Fit the separate models
+```{r}
+#fit separate models
+validation_30 <- validation_30 %>%
+  dplyr:: mutate(model_output = map2(cluster, data, fit_model)) 
+```
+
+5.4. Evaluate model accuracy
+```{r}
+#Extract model goodness of fit metrics and estimates
+validation_30 <- validation_30 %>%
+  dplyr::mutate(model_glance = map(model_output, glance),  # Extract R2, AIC, BIC, etc.
+                model_tidy = map(model_output, tidy), #extract models estimates
+                model_confint = map(model_output, confint_tidy)) # Extract confidence intervals)
+
+#Unnest
+Model_validation <- validation_30 %>%
+  dplyr::select(cluster, model_glance,model_tidy, model_confint) %>%
+  unnest(model_glance, model_tidy, model_confint)
+
+```
+
+
+#############################################
+### 6. References
+#############################################
+
+Campanhão, L. M. B., & Ranieri, V. E. L. (2023). Influence of forest proportion and configuration at the watershed and riparian zone scales on sediment yield: a simulation experiment. Landscape Ecology, 38(11), 2839-2860. https://doi.org/10.1007/s10980-023-01751-6
+
+Natural Capital Project. (2023). InVEST 3.14.0. In Stanford University, University of Minnesota, Chinese Academy of Sciences, The Nature Conservancy, World Wildlife Fund, Stockholm Resilience Centre and the Royal Swedish Academy of Sciences. https://naturalcapitalproject.stanford.edu/software/invest
+
+Valladares-Castellanos, M., de Jesús Crespo, R., Xu, Y. J., & Douthat, T. H. (2024). A framework for validating watershed ecosystem service models in the United States using long-term water quality data: Applications with the InVEST Nutrient Delivery (NDR) model in Puerto Rico. Science of the Total Environment, 949, 175111. https://doi.org/https://doi.org/10.1016/j.scitotenv.2024.175111 

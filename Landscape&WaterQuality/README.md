@@ -21,9 +21,7 @@ This repository hosts the database developed for the study "Long-term Land Use L
 
 We are sharing:
 
-Database file: 
-
-Landscape and Water Quality Database.xlsx – includes data on LULC proportions, landscape metrics, and nutrient concentrations/loads across scales.
+Database file: Landscape and Water Quality Database.xlsx – includes data on LULC proportions, landscape metrics, and nutrient concentrations/loads across scales.
 
 Metadata file: Landscape and Water Quality Metadata.xlsx – describes each column in the database, including units and definitions.
 

@@ -1,16 +1,15 @@
-## Addressing spatial and temporal data scarcity in water quality monitoring using machine learning for long-term ecosystem service calibration and validation 
+## Using machine learning for long-term calibration and validation of water quality ecosystem service models in data-scarce regions 
 
 ---
 
 #### General Description:
 
-Authors: Valladares-Castellanos M, De Jesus Crespo R, Douthat T*
+Authors: Valladares-Castellanos M, de Jesús Crespo R, Douthat T*
 
 *Corresponding Author
   
-Reference: "Valladares-Castellanos M, De Jesus Crespo R, Douthat T. 2025. Addressing spatial and temporal data scarcity in water 
-quality monitoring using machine learning for long-term ecosystem service calibration and validation. Science of the Total Environment (submitted)."
-version date: "May 2025"
+Reference: "Valladares-Castellanos M, de Jesús Crespo R, Douthat T. 2025. Using machine learning for long-term calibration and validation of water quality ecosystem service models in data-scarce regions. Science of the Total Environment (Accepted)."
+version date: "August 2025"
 
 Github:https://github.com/LSU-EPG/Puerto-Rico-ES-Project/tree/main/Data_Scarcity_Framework
 

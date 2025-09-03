@@ -2,8 +2,8 @@
 title: "InVEST NDR Validation R Script" 
 sub title: "A framework for validating watershed ecosystem service models 
 using United States long-term water quality data: Applications with the InVEST Nutrient Delivery (NDR) model in Puerto Rico"
-author: "Valladares-Castellanos M, De Jesus Crespo R,  Xu J, Douthat T*"
-reference: "Valladares-Castellanos M, De Jesus Crespo R,  Xu J, Douthat T. 2024. A framework for validating watershed ecosystem service models 
+author: "Valladares-Castellanos M, de Jesús Crespo R,  Xu J, Douthat T*"
+reference: "Valladares-Castellanos M, de Jesús Crespo R,  Xu J, Douthat T. 2024. A framework for validating watershed ecosystem service models 
 using United States long-term water quality data: Applications with the InVEST Nutrient Delivery (NDR) model in Puerto Rico. Science of the Total Environment (submitted)."
 version date: "July 2024"
 github: "https://github.com/LSU-EPG/Puerto-Rico-ES-Project/blob/main/InVESTNDR_Framework/InVEST%20NDR%20Validation%20R%20Script.Rmd"
@@ -1096,6 +1096,7 @@ https://pubs.usgs.gov/publication/fs20083067
 
 Santon, M., Korner-Nievergelt, F., Michiels, N. K., & Anthes, N. (2023). A versatile workflow for 
 linear modelling in R. Frontiers in Ecology and Evolution, 11, 1065273. 
+
 
 
 

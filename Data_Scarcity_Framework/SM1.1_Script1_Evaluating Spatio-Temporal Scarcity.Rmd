@@ -1,7 +1,7 @@
 ---
 title: "Evaluating Spatio-Temporal Data Scarcity in Water Quality Monitoring"
-publication: "Addressing spatial and temporal data scarcity in water quality monitoring using machine learning for long-term ecosystem service calibration and validation" 
-author: "Valladares-Castellanos M, De Jesus Crespo R, Douthat T"
+publication: "Using machine learning for long-term calibration and validation of water quality ecosystem service models in data-scarce regions" 
+author: "Valladares-Castellanos M, de Jesús Crespo R, Douthat T"
 github: https://github.com/LSU-EPG/Puerto-Rico-ES-Project/tree/main/Data_Scarcity_Framework
 ---
 
@@ -385,3 +385,4 @@ National Water Quality Monitoring Council. (2020). Water Quality Portal (2000-20
 Natural Capital Project. (2023). InVEST 3.14.0. In Stanford University, University of Minnesota, Chinese Academy of Sciences, The Nature Conservancy, World Wildlife Fund, Stockholm Resilience Centre and the Royal Swedish Academy of Sciences. https://naturalcapitalproject.stanford.edu/software/invest
 
 Valladares-Castellanos, M., de Jesús Crespo, R., Xu, Y. J., & Douthat, T. H. (2024). A framework for validating watershed ecosystem service models in the United States using long-term water 
+
